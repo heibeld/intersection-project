@@ -8,7 +8,6 @@ void systick_delay_us(uint16_t);
 void intersection_pin_enable();
 void pedestrian_pin_enable();
 void timer32_init();
-void timer32_delay(uint16_t delay);
 void IR_init();
 void LCD_pin_enable(void);
 void systick_delay_us (uint16_t delay);
@@ -22,11 +21,13 @@ void write_data (char data[],int n);
 void light_time_display(void);
 void second_timer_init(void);
 void status_update(void);
+void piezo_init(void);
+void piezo_play(void);
 
 
 
-int intersection_flag= 0,flash_flag = 1,buggy = 0;
-int currentedge, lastedge, period, detect14Hz, detect10Hz, pedestrian,seconds;
+int intersection_time = 0,flash_flag = 1,buggy = 0;
+int currentedge = 0, lastedge=0, period=0, detect14Hz=0, detect10Hz=0, pedestrian=0,seconds = 0,deaf_time= 0;
 enum intersection_states{
     go_busy,
     wait_busy,
@@ -56,10 +57,10 @@ int main(void)
     NVIC_EnableIRQ(T32_INT2_IRQn);          //Enable Timer32_2 interrupt.
     NVIC_EnableIRQ(PORT2_IRQn);             //enable port interrupt
     NVIC_EnableIRQ(TA0_N_IRQn);             //enable timer a0 interrupt
-    NVIC_EnableIRQ(TA3_N_IRQn);
+    NVIC_EnableIRQ(TA3_0_IRQn);             //enable timer a3 interrupt for LCD seconds timer
     __enable_irq();                         //Enable all interrupts for MSP432
 
-    timer32_delay(12);          //initial delay for busy green light
+
     light_sequence_display();   //print status to monitor
 
 while (1)
@@ -78,12 +79,9 @@ while (1)
             {
                 while (detect10Hz);      //busy stays green while bus is emitting
             }
-            if (intersection_flag== 1)              //time up in traffic light cycle
+            if (intersection_time >= 12)              //time up in traffic light cycle
             {
-                intersection_flag= 0;
-                timer32_delay(3);
-                TIMER_A3->CTL |= TACLR;
-                seconds = 0;                //resets seconds counter for LED display
+                intersection_time= 0;
                 state = wait_busy;
                 light_sequence_display();
             }
@@ -92,13 +90,11 @@ while (1)
         case wait_busy:
         {
             status_update();
+            light_time_display();
 
-            if (intersection_flag== 1)
+            if (intersection_time >= 3)
             {
-                intersection_flag= 0;
-                timer32_delay(1);
-                TIMER_A3->CTL |= TACLR;
-                seconds = 0;                //resets seconds counter for LED display
+                intersection_time= 0;
                 state = stop_busy;
                 light_sequence_display();   //print status to monitor
             }
@@ -108,9 +104,10 @@ while (1)
         {
             status_update();
 
-            if (intersection_flag== 1)
+            if (intersection_time >= 1)
             {
-                intersection_flag= 0;
+                intersection_time = 0;
+
                 if (detect14Hz)         //if emergency vehicle
                 {
                     state = go_busy;
@@ -118,14 +115,12 @@ while (1)
                 }
                 else if (!(pedestrian))      // if no button pressed
                 {
-                    timer32_delay(8);
                     state = go_slow;
                     light_sequence_display();   //print new status to monitor
                 }
                 else if (pedestrian)    //if button pressed
                 {
                     pedestrian = 0;
-                    timer32_delay(15);
                     state = go_slow_ped;
                     light_sequence_display();   //print new status to monitor
                 }
@@ -136,19 +131,17 @@ while (1)
         case go_slow:
         {
             status_update();
+            light_time_display();
 
             if (detect14Hz)
             {
                 state = wait_slow;
                 light_sequence_display();   //print status to monitor
-                timer32_delay(3);
             }
-            if (intersection_flag== 1)
+            if (intersection_time >= 8)
             {
-                intersection_flag= 0;
-                timer32_delay(3);
+                intersection_time= 0;
                 TIMER_A3->CTL |= TACLR;
-                seconds = 0;                //resets seconds counter for LED display
                 state = wait_slow;
                 light_sequence_display();   //print status to monitor
             }
@@ -157,13 +150,12 @@ while (1)
         case wait_slow:
         {
             status_update();
+            light_time_display();
 
-            if (intersection_flag== 1)
+            if (intersection_time >= 3)
             {
-                intersection_flag= 0;
-                timer32_delay(1);
+                intersection_time= 0;
                 TIMER_A3->CTL |= TACLR;
-                seconds = 0;                //resets seconds counter for LED display
                 state = stop_slow;
                 light_sequence_display();   //print status to monitor
             }
@@ -172,12 +164,11 @@ while (1)
         case stop_slow:
         {
             status_update();
-            if (intersection_flag== 1)
+
+            if (intersection_time >= 1)
             {
-                intersection_flag= 0;
-                timer32_delay(12);
+                intersection_time= 0;
                 TIMER_A3->CTL |= TACLR;
-                seconds = 0;                //resets seconds counter for LED display
                 state = go_busy;
                 light_sequence_display();   //print status to monitor
             }
@@ -186,18 +177,17 @@ while (1)
         case go_slow_ped:
         {
             status_update();
+            light_time_display();
 
             if (detect14Hz)
             {
                 state = wait_slow_ped;
                 light_sequence_display();   //print status to monitor
             }
-            if (intersection_flag== 1)
+            if (intersection_time >= 15)
             {
-                intersection_flag= 0;
-                timer32_delay(5);
+                intersection_time= 0;
                 TIMER_A3->CTL |= TACLR;
-                seconds = 0;                //resets seconds counter for LED display
                 TIMER32_2->LOAD = 1500000;
                 state = wait_slow_ped;
                 light_sequence_display();   //print status to monitor
@@ -207,6 +197,7 @@ while (1)
         case wait_slow_ped:
         {
             status_update();
+            light_time_display();
 
             if (flash_flag == 1)
             {
@@ -214,12 +205,9 @@ while (1)
                 P2->OUT ^= BIT4;    //toggle amber LED
                 TIMER32_2->LOAD = 1500000; //set another timer for flag toggle
             }
-            if (intersection_flag== 1)
+            if (intersection_time  >= 5)
             {
-                intersection_flag= 0;
-                timer32_delay(1);
-                TIMER_A3->CTL |= TACLR;
-                seconds = 0;                //resets seconds counter for LED display
+                intersection_time= 0;
                 state = stop_slow;
                 light_sequence_display();   //print new light status to monitor
             }
@@ -229,7 +217,6 @@ while (1)
         {
             state = go_busy;
             light_sequence_display();   //print new light status to monitor
-            timer32_delay(12);
         }
     }
 }
@@ -300,7 +287,7 @@ void pedestrian_pin_enable()
 void T32_INT1_IRQHandler()        //Interrupt Handler for Timer 1.
 {
     TIMER32_1->INTCLR = 1;          //Clear interrupt flag so it does not interrupt again immediately.
-    intersection_flag= 1;                       //increment flag
+    intersection_time++;                       //increment flag
 }
 
 /*
@@ -317,17 +304,11 @@ void T32_INT2_IRQHandler()        //Interrupt Handler for Timer 2.
  */
 void timer32_init()
 {
-    TIMER32_1->CONTROL = 0b11100011;
+    TIMER32_1->CONTROL = 0b11100010;
+    TIMER32_1->LOAD = 3000000;              //load for 1 second interrupts for timer
     TIMER32_2->CONTROL = 0b11100011;
 }
 
-/*
- * Short function that when called starts a delay for a user input # of seconds
- */
-void timer32_delay(uint16_t delay)
-{
-    TIMER32_1->LOAD = (delay * 3000000);
-}
 
 /*
  * Initializes the IR pins as well as the TIMER_A0 init steps
@@ -375,6 +356,8 @@ void TA0_N_IRQHandler(void)
 void PORT2_IRQHandler(void)
 {
     pedestrian = 1;
+    seconds = 0;
+    TIMER_A3->CTL |= TIMER_A_CTL_CLR;
     P2->IFG = 0;
 }
 
@@ -477,9 +460,9 @@ void light_sequence_display(void)
     write_command(0x00);                    //go to home pos
     char line1[] = "Green on Heibel ";
     char line2[] = "Yellow on Heibel";
-    char line3[] = "    Red Light    ";     //init state display readouts
-    char line4[] = " Green on Babb  ";
-    char line5[] = " Yellow on Babb ";
+    char line3[] = "   Red Light    ";     //init state display readouts
+    char line4[] = "Green on Babb   ";
+    char line5[] = "Yellow on Babb  ";
 
     if      (state == go_busy)
     {
@@ -487,7 +470,6 @@ void light_sequence_display(void)
         systick_delay_us(100);          //delay between data and comm.
         write_command(0xC0);            //go to second line of lcd
         systick_delay_us(100);          //delay between data and comm.
-        light_time_display();           //writes time in seconds to 2nd line
     }
     else if (state == wait_busy)
     {
@@ -495,7 +477,6 @@ void light_sequence_display(void)
         systick_delay_us(100);          //delay between data and comm.
         write_command(0xC0);            //go to second line of lcd
         systick_delay_us(100);          //delay between data and comm.
-        light_time_display();           //writes time in seconds to 2nd line
     }
     else if (state == stop_busy)
     {
@@ -503,7 +484,6 @@ void light_sequence_display(void)
         systick_delay_us(100);          //delay between data and comm.
         write_command(0xC0);            //go to second line of lcd
         systick_delay_us(100);          //delay between data and comm.
-        light_time_display();           //writes time in seconds to 2nd line
     }
     else if (state == go_slow)
     {
@@ -511,7 +491,6 @@ void light_sequence_display(void)
         systick_delay_us(100);          //delay between data and comm.
         write_command(0xC0);            //go to second line of lcd
         systick_delay_us(100);          //delay between data and comm.
-        light_time_display();           //writes time in seconds to 2nd line
     }
     else if (state == wait_slow)
     {
@@ -519,7 +498,6 @@ void light_sequence_display(void)
         systick_delay_us(100);          //delay between data and comm.
         write_command(0xC0);            //go to second line of lcd
         systick_delay_us(100);          //delay between data and comm.
-        light_time_display();           //writes time in seconds to 2nd line
     }
     else if (state == stop_slow)
     {
@@ -527,7 +505,6 @@ void light_sequence_display(void)
         systick_delay_us(100);          //delay between data and comm.
         write_command(0xC0);            //go to second line of lcd
         systick_delay_us(100);          //delay between data and comm.
-        light_time_display();           //writes time in seconds to 2nd line
     }
     else if (state == go_slow_ped)
     {
@@ -535,7 +512,6 @@ void light_sequence_display(void)
         systick_delay_us(100);          //delay between data and comm.
         write_command(0xC0);            //go to second line of lcd
         systick_delay_us(100);          //delay between data and comm.
-        light_time_display();           //writes time in seconds to 2nd line
     }
     else if (state == wait_slow_ped)
     {
@@ -543,10 +519,11 @@ void light_sequence_display(void)
         systick_delay_us(100);          //delay between data and comm.
         write_command(0xC0);            //go to second line of lcd
         systick_delay_us(100);          //delay between data and comm.
-        light_time_display();           //writes time in seconds to 2nd line
     }
 }
-
+/*
+ * command that pushes bytes to the LCD for each character in a passed string 
+ */
 void write_data (char data[],int n)
 {
     P4->OUT |= BIT0;               //RS = 1 sets to d
@@ -559,29 +536,50 @@ void write_data (char data[],int n)
 
         }
 }
-
+/*
+ * Timer that counts for determining if a pedestrian needs the sounds on cross
+ */
 void second_timer_init(void)
 {
     TIMER_A3->CCR[0] = 32768;
-    TIMER_A3->CTL |= TASSEL_1 | MC_2 | TIMER_A_CTL_CLR | TIMER_A_CTL_IE;
+    TIMER_A3->CTL |= TASSEL_1 | TIMER_A_CTL_MC__UP | TIMER_A_CTL_CLR;
+    TIMER_A3->CCTL[0] = TIMER_A_CCTLN_CCIE;
 }
-
+/*
+ * Displays the second line of the LCD, re- printing so that each second updates the display
+ */
 void light_time_display(void)
 {
-    write_command(0xC0);
-    char time[9]="Time: ";
-    char sec[3]="n/a";
-    sprintf(sec,"%d   ",seconds);
+    write_command(0xC0);                //newline
+    char time[10] = "Time: ";
+    char sec[10]  = "n/a";
+    char add[10]  = "sec   ";
+    sprintf(sec,"%d   ",intersection_time);       //turns seconds integer into char array
 
-    write_data(time,5);
-    write_data(sec,3);
-    write_command(0x0C);                //
+    write_data(time,5);         //prints "TIME: "
+    write_data(sec,3);          //prints time
+    systick_delay_us(100);      //prints "sec"
+    write_data(add,6);
+
+    write_command(0x0C);                //remove cursor
 }
 
 void TA3_0_IRQHandler(void)
 {
-    seconds++;
-    light_time_display();
+    if ((P2->IN & BIT6) == 0)   //if button is pressed
+    {
+        seconds++;
+        if (seconds == 6)       //if 3 interrupts pass while button is held
+        {
+            deaf_time = 1;      //flag that  piezo  is needed for pedestrian
+        }
+    }
+
+    else
+    {
+        seconds = 0;
+    }
+    TIMER_A3->CCTL[0] &=~ TIMER_A_CCTLN_CCIFG;
 }
 /*
  * This function is used to update the LEDs to their new state
