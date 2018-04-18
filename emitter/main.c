@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+void initializations(void);
 void systick_init_interrupt(void);
 void systick_delay_ms(uint16_t delay);
 void systick_delay_us(uint16_t);
@@ -23,11 +24,15 @@ void second_timer_init(void);
 void status_update(void);
 void buzzer_init(void);
 void buzzer_play(int tone);
+void traffic_project_enable();
 
 
+int intersection_time = 0;
+int flash_flag = 1;
+int togglePlay = 0;
 
-int intersection_time = 0,flash_flag = 1,buggy = 0;
-int currentedge = 0, lastedge=0, period=0, detect14Hz=0, detect10Hz=0, pedestrian=0,seconds = 0,deaf_time= 0;
+int currentedge = 0, lastedge=0, period=0;
+int detect14Hz=0, detect10Hz=0, pedestrian=0,seconds = 0,deaf_time= 0;
 enum intersection_states{
     go_busy,
     wait_busy,
@@ -37,32 +42,15 @@ enum intersection_states{
     stop_slow,
     go_slow_ped,
     wait_slow_ped,
-    stop_slow_ped
+    stop_slow_ped,
+    stop
 }state;
 
 int main(void)
 {
     WDT_A->CTL = WDT_A_CTL_PW | WDT_A_CTL_HOLD;             // Stop WDT
 
-    systick_init_interrupt();
-    intersection_pin_enable();
-    pedestrian_pin_enable();
-    timer32_init();
-    second_timer_init();
-    IR_init();
-    LCD_pin_enable();
-    LCD_enable();
-    buzzer_init();
-
-    NVIC_EnableIRQ(T32_INT1_IRQn);          //Enable Timer32_1 interrupt.
-    NVIC_EnableIRQ(T32_INT2_IRQn);          //Enable Timer32_2 interrupt.
-    NVIC_EnableIRQ(PORT2_IRQn);             //enable port interrupt
-    NVIC_EnableIRQ(TA0_N_IRQn);             //enable timer a0 interrupt
-    NVIC_EnableIRQ(TA3_0_IRQn);             //enable timer a3 interrupt for LCD seconds timer
-    __enable_irq();                         //Enable all interrupts for MSP432
-
-
-    light_sequence_display();   //print status to monitor
+    initializations();
 
 while (1)
 {
@@ -72,17 +60,10 @@ while (1)
         {
             status_update();
             light_time_display();
-            if (detect14Hz)
+
+            if (intersection_time >= 12 & !(detect14Hz) & !(detect10Hz) )              //time up in traffic light cycle
             {
-                while (detect14Hz);     //waits in loop until emergency vehicle leaves
-            }
-            else if (detect10Hz)
-            {
-                while (detect10Hz);      //busy stays green while bus is emitting
-            }
-            if (intersection_time >= 12)              //time up in traffic light cycle
-            {
-                intersection_time= 0;
+                intersection_time= 0;       //reset intersection time
                 state = wait_busy;
                 light_sequence_display();
             }
@@ -95,7 +76,7 @@ while (1)
 
             if (intersection_time >= 3)
             {
-                intersection_time= 0;
+                intersection_time= 0;       //reset intersection time
                 state = stop_busy;
                 light_sequence_display();   //print status to monitor
             }
@@ -107,8 +88,7 @@ while (1)
 
             if (intersection_time >= 1)
             {
-                intersection_time = 0;
-
+                intersection_time = 0;       //reset intersection time
                 if (detect14Hz)         //if emergency vehicle
                 {
                     state = go_busy;
@@ -141,8 +121,7 @@ while (1)
             }
             if (intersection_time >= 8)
             {
-                intersection_time= 0;
-                TIMER_A3->CTL |= TACLR;
+                intersection_time= 0;       //reset intersection time
                 state = wait_slow;
                 light_sequence_display();   //print status to monitor
             }
@@ -155,7 +134,7 @@ while (1)
 
             if (intersection_time >= 3)
             {
-                intersection_time= 0;
+                intersection_time= 0;       //reset intersection time
                 state = stop_slow;
                 light_sequence_display();   //print status to monitor
             }
@@ -167,7 +146,7 @@ while (1)
 
             if (intersection_time >= 1)
             {
-                intersection_time= 0;
+                intersection_time= 0;       //reset intersection time
                 state = go_busy;
                 light_sequence_display();   //print status to monitor
             }
@@ -185,16 +164,16 @@ while (1)
             }
             if (deaf_time & intersection_time < 3)
             {
-                buzzer_play(4688);      //send 10Hz tone
+                buzzer_play(6000);      //send 10Hz tone
             }
             if (deaf_time & intersection_time > 3)
             {
-                buzzer_play(46874);     //send 1Hz tone
+                buzzer_play(8000);     //send 1Hz tone
             }
             if (intersection_time >= 15)
             {
-                intersection_time= 0;
-                TIMER32_2->LOAD = 1500000;
+                intersection_time= 0;       //reset intersection time
+                TIMER32_2->LOAD = 1500000;  //begin timer for interrupt for amber flash
                 state = wait_slow_ped;
                 light_sequence_display();   //print status to monitor
             }
@@ -213,17 +192,23 @@ while (1)
             }
             if (deaf_time)
             {
-                buzzer_play(15624);
+                buzzer_play(5000);      //play high tone to suggest crossing finish
             }
             if (intersection_time  >= 5)
             {
-                intersection_time= 0;
+                intersection_time= 0;       //reset intersection time
                 state = stop_slow;
                 buzzer_play(0);
                 light_sequence_display();   //print new light status to monitor
                 deaf_time = 0;
             }
             break;
+        }
+        case stop:
+        {
+            while(!(togglePlay));       //waits until button is pressed to begin traffic sim.
+            state = go_busy;
+            intersection_time = 0;
         }
         default:
         {
@@ -234,6 +219,32 @@ while (1)
 }
 }
 
+/*
+ * Function to shorten the state machine by running all initialization functions
+ */
+void initializations(void)
+{
+    systick_init_interrupt();
+    intersection_pin_enable();
+    pedestrian_pin_enable();
+    timer32_init();
+    second_timer_init();
+    IR_init();
+    LCD_pin_enable();
+    LCD_enable();
+    buzzer_init();
+
+    NVIC_EnableIRQ(T32_INT1_IRQn);          //Enable Timer32_1 interrupt.
+    NVIC_EnableIRQ(T32_INT2_IRQn);          //Enable Timer32_2 interrupt.
+    NVIC_EnableIRQ(PORT2_IRQn);             //enable port interrupt
+    NVIC_EnableIRQ(PORT3_IRQn);             //enable port int. for stop/start state
+    NVIC_EnableIRQ(TA0_N_IRQn);             //enable timer a0 interrupt
+    NVIC_EnableIRQ(TA3_0_IRQn);             //enable timer a3 interrupt for LCD seconds timer
+    __enable_irq();                         //Enable all interrupts for MSP432
+
+    //state = stop;
+    light_sequence_display();   //print status to monitor
+}
 void systick_init_interrupt(void)
 {
     SysTick->CTRL = 0;
@@ -262,7 +273,10 @@ void systick_delay_us(uint16_t delay)
         ;               // wait for flag to be SET
 
 }
-
+/*
+ * Enables the pins required for traffic lights
+ * lights are P5. busy(heibel) 0-2, slow(babb) 4-6
+ */
 void intersection_pin_enable()
 {
     P5->SEL0 &=~ 0xFF;
@@ -270,7 +284,9 @@ void intersection_pin_enable()
     P5->DIR  |=  0xFF;
     P5->OUT  &=~ 0xFF;      //gpio, output, low
 }
-
+/*
+ * Enables pinouts for  the amber and white LED's for pedestrians, as well as the pin for the intersection button
+ */
 void pedestrian_pin_enable()
 {
     P2->SEL0 &=~ BIT4 | BIT6 | BIT7;
@@ -294,7 +310,7 @@ void pedestrian_pin_enable()
 
 /*
  * Handles the general timing between states of the raffic lights
- * THis part flags when the time is up in a cycle of the intersection
+ * This part flags when the time is up in a cycle of the intersection
  */
 void T32_INT1_IRQHandler()        //Interrupt Handler for Timer 1.
 {
@@ -347,8 +363,8 @@ void TA0_N_IRQHandler(void)
  {
     currentedge = TIMER_A0->CCR[2];
     period = currentedge-lastedge;              //calculates period
-    if (currentedge < lastedge)
-        period = lastedge-currentedge;          //conditional for when timer rolls  over, so  that the period value is not negative
+    //if (currentedge < lastedge)
+    //  period = ((lastedge-65535) + currentedge);          //conditional for when timer rolls  over, so  that the period value is not negative
     detect14Hz = 0;
     detect10Hz = 0;                             //normailizes flag at 0 so constant refreshes clear flag
     if ((35635<period) && (period<39375))       // within 5% of 10Hz period
@@ -364,10 +380,11 @@ void TA0_N_IRQHandler(void)
 
 /*
  * Pedestrian walk button interrupt service
+ * when button is pressed the
  */
 void PORT2_IRQHandler(void)
 {
-    pedestrian = 1;
+    pedestrian = 1;     //says that there is apedestrian
     seconds = 0;
     TIMER_A3->CTL |= TIMER_A_CTL_CLR;
     P2->IFG = 0;
@@ -468,7 +485,7 @@ void write_command (uint8_t byte)
  */
 void light_sequence_display(void)
 {
-    write_command(0x01);
+    write_command(0x01);                    //clear screen
     write_command(0x00);                    //go to home pos
     char line1[] = "Green on Heibel ";
     char line2[] = "Yellow on Heibel";
@@ -583,7 +600,7 @@ void TA3_0_IRQHandler(void)
         seconds++;
         if (seconds == 6)       //if 3 interrupts pass while button is held
         {
-            deaf_time = 1;      //flag that  piezo  is needed for pedestrian
+            deaf_time = 1;      //flag that piezo is needed for pedestrian
         }
     }
 
@@ -640,19 +657,39 @@ void status_update(void)
         ;
     }
 }
+
+/*
+ * Command that initializes P5.7 for TIMER a2 as well as
+ * initializing TIMER A2 for
+ */
 void buzzer_init(void)
 {
     P5->SEL0 |= BIT7;
     P5->SEL1 &=~ BIT7;
-    TIMER_A2->CCR[0] = 6000; //init period
+    TIMER_A2->CCR[0] = 7000; //init period
     TIMER_A2->CCR[2] = 0;       //no sound initially
-    //TIMER_A2->EX0 = 0b0111;     //divide by 8 again
     TIMER_A2->CTL |= TIMER_A_CTL_TASSEL_2 | TIMER_A_CTL_MC_1 | TIMER_A_CTL_CLR |
-                     TIMER_A_CTL_ID_0;              //SMCLK, UP, CLEAR, DIV by 8
+                     TIMER_A_CTL_ID_0;              //SMCLK, UP, CLEAR, DIV by 1
     TIMER_A2->CCTL[2] |= TIMER_A_CCTLN_OUTMOD_7;      //reset/set
 }
 void buzzer_play(int tone)
 {
     TIMER_A2->CCR[0] = tone; //1 SEC. / 10
     TIMER_A2->CCR[2] = (tone/2); //50% DUTY CYCLE
+}
+
+void traffic_project_enable()
+{
+    P3->SEL0 &=~ BIT7;      //gpio
+    P3->SEL1 &=~ BIT7;      //gpio
+    P3->DIR  &=~ BIT7;      //input
+    P3->REN  |=  BIT7;      //enable resistor
+    P3->OUT  |=  BIT7;      //pullup
+    P3->IES  |=  BIT7;      //trigger on high to low
+    P3->IE   |=  BIT7;      //enable interrupt
+    P3->IFG  = 0;           //clear flags
+}
+void PORT3_IRQHandler()
+{
+    togglePlay ^= 1;        //toggles
 }
